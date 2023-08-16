@@ -58,6 +58,11 @@ Here are the options you can give Smokescreen:
    --deny-address value                        Add IP[:PORT] to list of blocked IPs.  Repeatable.
    --allow-address value                       Add IP[:PORT] to list of allowed IPs.  Repeatable.
    --egress-acl-file FILE                      Validate egress traffic against FILE
+   --expose-prometheus-metrics                 Exposes metrics via a Prometheus scrapable endpoint.
+   --prometheus-endpoint ENDPOINT              Specify endpoint to host Prometheus metrics on. (default: "/metrics")
+                                                 Requires `--expose-prometheus-metrics` to be set.
+   --prometheus-port PORT                      Specify port to host Prometheus metrics on. (default "9810")
+                                                 Requires `--expose-prometheus-metrics` to be set.
    --resolver-address ADDRESS                  Make DNS requests to ADDRESS (IP:port).  Repeatable.
    --statsd-address ADDRESS                    Send metrics to statsd at ADDRESS (IP:port). (default: "127.0.0.1:8200")
    --tls-server-bundle-file FILE               Authenticate to clients using key and certs from FILE
@@ -149,6 +154,8 @@ For example, specifying `example.com` in your global_allow_list will allow traff
 
 Similarly, specifying `malicious.com` in your global_deny_list will deny traffic for that domain on a role, even if that role is set to `report` or `open`.
 However, if the host specifies `malicious.com` in its `allowed_domains`, traffic to `malicious.com` will be allowed on that role, regardless of policy.
+
+> :warning: **The global_deny_list will only block specific *domains*, not entire *destinations*.** For example, if `malicious.com` is in the global_deny_list but the IP address that it resolves to is not, roles with an `open` policy will still be able to access the destination by using its IP address directly. For this reason, **we recommend using allowlists instead of denylists, whenever it is possible to do so.**
 
 If a domain matches both the `global_allow_list` and the `global_deny_list`, the `global_deny_list` behavior takes priority.
 

@@ -175,7 +175,9 @@ func TestClearsErrorHeader(t *testing.T) {
 	t.Run("Clears error header set by upstream", func(t *testing.T) {
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-		cfg, err := testConfig("test-trusted-srv")
+		cfg, err := testConfig("test-local-srv")
+		r.NoError(err)
+		err = cfg.SetAllowAddresses([]string{"127.0.0.1"})
 		r.NoError(err)
 
 		proxySrv := proxyServer(cfg)
@@ -186,9 +188,17 @@ func TestClearsErrorHeader(t *testing.T) {
 		client, err := proxyClient(proxySrv.URL)
 		r.NoError(err)
 
+		// Create a test http.TestServer to serve a response with the error header set.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(errorHeader, "foobar")
+			w.Header().Set("X-Smokescreen-Test", "yes")
+			w.WriteHeader(200)
+		}))
+		defer srv.Close()
+
 		// Talk "through" the proxy to our malicious upstream that sets the
 		// error header.
-		resp, err := client.Get("http://httpbin.org/response-headers?X-Smokescreen-Error=foobar&X-Smokescreen-Test=yes")
+		resp, err := client.Get(srv.URL)
 		r.NoError(err)
 
 		// Should succeed
@@ -396,11 +406,10 @@ func TestHealthcheck(t *testing.T) {
 
 var invalidHostCases = []struct {
 	scheme    string
-	expectErr bool
 	proxyType string
 }{
-	{"http", false, "http"},
-	{"https", true, "connect"},
+	{"http", "http"},
+	{"https", "connect"},
 }
 
 func TestInvalidHost(t *testing.T) {
@@ -420,12 +429,19 @@ func TestInvalidHost(t *testing.T) {
 			client, err := proxyClient(proxySrv.URL)
 			r.NoError(err)
 
+			// This hostname does not exist and should never resolve
 			resp, err := client.Get(fmt.Sprintf("%s://notarealhost.test", testCase.scheme))
-			if testCase.expectErr {
-				r.Contains(err.Error(), "Request rejected by proxy")
+			if testCase.scheme == "https" {
+				r.Error(err)
+				r.Contains(err.Error(), "Bad gateway")
 			} else {
+				// Plain HTTP
 				r.NoError(err)
 				r.Equal(http.StatusBadGateway, resp.StatusCode)
+
+				defer resp.Body.Close()
+				b, _ := ioutil.ReadAll(resp.Body)
+				r.Contains(string(b), "Failed to resolve remote hostname")
 			}
 
 			entry := findCanonicalProxyDecision(logHook.AllEntries())
@@ -565,13 +581,13 @@ func TestProxyProtocols(t *testing.T) {
 		// DNS request along with its timing metric.
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:true")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "true"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
-		lookups, err := tmc.GetCount("resolver.attempts_total")
+		lookups, err := tmc.GetCount("resolver.attempts_total", make(map[string]string))
 		r.NoError(err)
 		r.Equal(lookups, uint64(1))
-		ltime, err := tmc.GetCount("resolver.lookup_time")
+		ltime, err := tmc.GetCount("resolver.lookup_time", make(map[string]string))
 		r.NoError(err)
 		r.Equal(ltime, uint64(1))
 
@@ -629,13 +645,13 @@ func TestProxyProtocols(t *testing.T) {
 		// DNS request along with its timing metric.
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:true")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "true"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
-		lookups, err := tmc.GetCount("resolver.attempts_total")
+		lookups, err := tmc.GetCount("resolver.attempts_total", make(map[string]string))
 		r.NoError(err)
 		r.Equal(lookups, uint64(1))
-		ltime, err := tmc.GetCount("resolver.lookup_time")
+		ltime, err := tmc.GetCount("resolver.lookup_time", make(map[string]string))
 		r.NoError(err)
 		r.Equal(ltime, uint64(1))
 
@@ -726,7 +742,7 @@ func TestProxyTimeouts(t *testing.T) {
 		// timeouts to Smokescreen; same reasons we test for EOF above.
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:true")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "true"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
 
@@ -762,10 +778,10 @@ func TestProxyTimeouts(t *testing.T) {
 
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:false")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "false"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
-		i, err = tmc.GetCount("cn.atpt.connect.err", "type:timeout")
+		i, err = tmc.GetCount("cn.atpt.connect.err", map[string]string{"type": "timeout"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
 	})
@@ -837,10 +853,10 @@ func TestProxyConnectFailure(t *testing.T) {
 
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:false")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "false"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
-		i, err = tmc.GetCount("cn.atpt.connect.err", "type:refused")
+		i, err = tmc.GetCount("cn.atpt.connect.err", map[string]string{"type": "refused"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
 	})
@@ -903,7 +919,7 @@ func TestProxyHalfClosed(t *testing.T) {
 
 	tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 	r.True(ok)
-	i, err := tmc.GetCount("cn.atpt.total", "success:true")
+	i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "true"})
 	r.NoError(err)
 	r.Equal(i, uint64(1))
 
@@ -953,10 +969,10 @@ func TestCustomDialTimeout(t *testing.T) {
 
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:false")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "false"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
-		i, err = tmc.GetCount("cn.atpt.connect.err", "type:timeout")
+		i, err = tmc.GetCount("cn.atpt.connect.err", map[string]string{"type": "timeout"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
 	})
@@ -995,10 +1011,10 @@ func TestCustomDialTimeout(t *testing.T) {
 
 		tmc, ok := cfg.MetricsClient.(*metrics.MockMetricsClient)
 		r.True(ok)
-		i, err := tmc.GetCount("cn.atpt.total", "success:false")
+		i, err := tmc.GetCount("cn.atpt.total", map[string]string{"success": "false"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
-		i, err = tmc.GetCount("cn.atpt.connect.err", "type:timeout")
+		i, err = tmc.GetCount("cn.atpt.connect.err", map[string]string{"type": "timeout"})
 		r.NoError(err)
 		r.Equal(i, uint64(1))
 
@@ -1048,6 +1064,50 @@ func TestRejectResponseHandler(t *testing.T) {
 	})
 }
 
+// Test that Smokescreen calls the custom accept response handler (if defined in the Config struct)
+// after every accepted request
+func TestAcceptResponseHandler(t *testing.T) {
+	r := require.New(t)
+	testHeader := "TestAcceptResponseHandlerHeader"
+	t.Run("Testing custom accept response handler", func(t *testing.T) {
+		cfg, err := testConfig("test-local-srv")
+
+		// set a custom AcceptResponseHandler that will set a header on every reject response
+		cfg.AcceptResponseHandler = func(_ *SmokescreenContext, resp *http.Response) error {
+			resp.Header.Set(testHeader, "This header is added by the AcceptResponseHandler")
+			return nil
+		}
+		r.NoError(err)
+
+		proxySrv := proxyServer(cfg)
+		r.NoError(err)
+		defer proxySrv.Close()
+
+		// Create a http.Client that uses our proxy
+		client, err := proxyClient(proxySrv.URL)
+		r.NoError(err)
+
+		// Send a request that should be allowed
+		resp, err := client.Get("http://example.com")
+		r.NoError(err)
+
+		// The AcceptResponseHandler should set our custom header
+		h := resp.Header.Get(testHeader)
+		if h == "" {
+			t.Errorf("Expecting header %s to be set by AcceptResponseHandler", testHeader)
+		}
+		// Send a request that should be blocked
+		resp, err = client.Get("http://127.0.0.1")
+		r.NoError(err)
+
+		// The header set by our custom reject response handler should not be set
+		h = resp.Header.Get(testHeader)
+		if h != "" {
+			t.Errorf("Expecting header %s to not be set by AcceptResponseHandler", testHeader)
+		}
+	})
+}
+
 func TestCustomRequestHandler(t *testing.T) {
 	r := require.New(t)
 	testHeader := "X-Verify-Request-Header"
@@ -1070,7 +1130,7 @@ func TestCustomRequestHandler(t *testing.T) {
 		return nil
 	}
 
-	t.Run("CustomRequestHandler works for HTTPS", func(t *testing.T) {
+	t.Run("PostDecisionRequestHandler works for HTTPS", func(t *testing.T) {
 		testCases := []struct {
 			header        http.Header
 			expectedError bool
@@ -1088,7 +1148,7 @@ func TestCustomRequestHandler(t *testing.T) {
 		r.NoError(err)
 		err = cfg.SetAllowAddresses([]string{"127.0.0.1"})
 		r.NoError(err)
-		cfg.CustomRequestHandler = customRequestHandler
+		cfg.PostDecisionRequestHandler = customRequestHandler
 
 		l, err := net.Listen("tcp", "localhost:0")
 		r.NoError(err)
@@ -1119,7 +1179,7 @@ func TestCustomRequestHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("CustomRequestHandler works for HTTP", func(t *testing.T) {
+	t.Run("PostDecisionRequestHandler works for HTTP", func(t *testing.T) {
 		testCases := []struct {
 			header        string
 			expectedError bool
@@ -1137,7 +1197,7 @@ func TestCustomRequestHandler(t *testing.T) {
 		r.NoError(err)
 		err = cfg.SetAllowAddresses([]string{"127.0.0.1"})
 		r.NoError(err)
-		cfg.CustomRequestHandler = customRequestHandler
+		cfg.PostDecisionRequestHandler = customRequestHandler
 
 		l, err := net.Listen("tcp", "localhost:0")
 		r.NoError(err)
