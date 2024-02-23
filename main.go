@@ -13,6 +13,8 @@ import (
 // client's certificate.  If no certificate is provided, the AllowMissingRole
 // configuration option will control whether the request is rejected, or the
 // default ACL is applied.
+//
+//lint:ignore U1000 unused default function
 func defaultRoleFromRequest(req *http.Request) (string, error) {
 	if req.TLS == nil {
 		return "", smokescreen.MissingRoleError("defaultRoleFromRequest requires TLS")
@@ -23,12 +25,21 @@ func defaultRoleFromRequest(req *http.Request) (string, error) {
 	return req.TLS.PeerCertificates[0].Subject.CommonName, nil
 }
 
+func convexRoleFromRequest(req *http.Request) (string, error) {
+	backend := req.Header.Get("x-convex-backend")
+	if backend != "" {
+		req.Header.Del("x-convex-backend")
+		return backend, nil
+	}
+	return "", nil
+}
+
 func main() {
 	conf, err := cmd.NewConfiguration(nil, nil)
 	if err != nil {
 		logrus.Fatalf("Could not create configuration: %v", err)
 	} else if conf != nil {
-		conf.RoleFromRequest = defaultRoleFromRequest
+		conf.RoleFromRequest = convexRoleFromRequest
 
 		conf.Log.Formatter = &logrus.JSONFormatter{}
 
