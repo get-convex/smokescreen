@@ -26,9 +26,9 @@ func defaultRoleFromRequest(req *http.Request) (string, error) {
 }
 
 func convexRoleFromRequest(req *http.Request) (string, error) {
-	backend := req.Header.Get("x-convex-backend")
+	backend := req.Header.Get("Proxy-Authorization")
 	if backend != "" {
-		req.Header.Del("x-convex-backend")
+		req.Header.Del("Proxy-Authorization")
 		return backend, nil
 	}
 	return "", nil
