@@ -303,8 +303,6 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	sctx.cfg.ConnTracker.RecordAttempt(sctx.requestedHost, true)
 
 	if conn != nil {
-		fields := logrus.Fields{}
-
 		if addr := conn.LocalAddr(); addr != nil {
 			fields[LogFieldOutLocalAddr] = addr.String()
 		}
@@ -312,7 +310,6 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 		if addr := conn.RemoteAddr(); addr != nil {
 			fields[LogFieldOutRemoteAddr] = addr.String()
 		}
-
 	}
 	sctx.logger = sctx.logger.WithFields(fields)
 
@@ -643,7 +640,8 @@ func handleConnect(config *Config, pctx *goproxy.ProxyCtx) (string, error) {
 	}
 
 	// checkIfRequestShouldBeProxied can return an error if either the resolved address is disallowed,
-	// or if there is a DNS resolution failure.
+	// or if there is a DNS resolution failure, or if the subsequent proxy host (specified by the
+	// X-Https-Upstream-Proxy header in the CONNECT request to _this_ proxy) is disallowed.
 	sctx.Decision, sctx.lookupTime, pctx.Error = checkIfRequestShouldBeProxied(config, pctx.Req, destination)
 	if pctx.Error != nil {
 		// DNS resolution failure
@@ -932,7 +930,15 @@ func checkACLsForRequest(config *Config, req *http.Request, destination hostport
 		return decision
 	}
 
-	ACLDecision, err := config.EgressACL.Decide(role, destination.Host)
+	// X-Upstream-Https-Proxy is a header that can be set by the client to specify
+	// a _subsequent_ proxy to use for the CONNECT request. This is used to allow traffic
+	// flow as in: client -(TLS)-> smokescreen -(TLS)-> external proxy -(TLS)-> destination.
+	// Without this header, there's no way for the client to specify a subsequent proxy.
+	// Also note - Get returns the first value for a given header, or the empty string,
+	// which is the behavior we want here.
+	connectProxyHost := req.Header.Get("X-Upstream-Https-Proxy")
+
+	ACLDecision, err := config.EgressACL.Decide(role, destination.Host, connectProxyHost)
 	decision.project = ACLDecision.Project
 	decision.reason = ACLDecision.Reason
 	if err != nil {
