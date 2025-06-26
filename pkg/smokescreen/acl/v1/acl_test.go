@@ -358,3 +358,84 @@ func TestHostMatchesGlob(t *testing.T) {
 		})
 	}
 }
+
+func TestMitmComfig(t *testing.T) {
+	a := assert.New(t)
+
+	yl := NewYAMLLoader(path.Join("testdata", "mitm_config.yaml"))
+	acl, err := New(logrus.New(), yl, []string{})
+
+	a.NoError(err)
+	a.NotNil(acl)
+
+	mitmService := "enforce-dummy-mitm-srv"
+
+	proj, err := acl.Project(mitmService)
+	a.NoError(err)
+	a.Equal("usersec", proj)
+
+	d, err := acl.Decide(mitmService, "example-mitm.com", "")
+	a.NoError(err)
+	a.Equal(Allow, d.Result)
+	a.Equal("host matched allowed domain in rule", d.Reason)
+
+	a.NotNil(d.MitmConfig)
+	a.Equal(true, d.MitmConfig.DetailedHttpLogs)
+	a.Equal([]string{"User-Agent"}, d.MitmConfig.DetailedHttpLogsFullHeaders)
+	a.Equal(map[string]string{"Accept-Language": "el"}, d.MitmConfig.AddHeaders)
+}
+
+func TestInvalidMitmComfig(t *testing.T) {
+	a := assert.New(t)
+
+	acl := &ACL{
+		Rules: map[string]Rule{
+			"enforce-dummy-mitm-srv": {
+				Project: "usersec",
+				Policy:  Enforce,
+				DomainGlobs: []string{
+					"example.com",
+				},
+				MitmDomains: []MitmDomain{{
+					Domain: "example-mitm.com",
+					AddHeaders: map[string]string{
+						"Accept-Language": "el",
+					},
+					DetailedHttpLogs: true,
+				}},
+			},
+		},
+	}
+
+	err := acl.Validate()
+	a.Error(err)
+}
+func TestDefaultRuleValidationWithDisableActions(t *testing.T) {
+	a := assert.New(t)
+	logger := logrus.New()
+
+	// Config with open default rule
+	yamlFilePath := path.Join("testdata", "sample_default_bypass_config.yaml")
+	yl := NewYAMLLoader(yamlFilePath)
+
+	// Attempt to load the ACL with "open" policy disabled
+	acl, err := New(logger, yl, []string{"open"})
+
+	a.Error(err, "ACL loading should have errored due to invalid default rule.")
+	a.Nil(acl, "ACL should not be loaded when the default rule is invalid.")
+}
+
+func TestDefaultRuleValidationWithInvalidGlob(t *testing.T) {
+	a := assert.New(t)
+	logger := logrus.New()
+
+	// Config with open default rule
+	yamlFilePath := path.Join("testdata", "contains_invalid_glob_default.yaml")
+	yl := NewYAMLLoader(yamlFilePath)
+
+	// Attempt to load the ACL with "open" policy disabled
+	acl, err := New(logger, yl, []string{"open"})
+
+	a.Error(err, "ACL loading should have errored due to invalid default rule.")
+	a.Nil(acl, "ACL should not be loaded when the default rule is invalid.")
+}

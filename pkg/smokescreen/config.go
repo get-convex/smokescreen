@@ -19,6 +19,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/stripe/goproxy"
 	acl "github.com/stripe/smokescreen/pkg/smokescreen/acl/v1"
 	"github.com/stripe/smokescreen/pkg/smokescreen/conntrack"
 	"github.com/stripe/smokescreen/pkg/smokescreen/metrics"
@@ -73,7 +74,7 @@ type Config struct {
 	TransportMaxIdleConns        int
 	TransportMaxIdleConnsPerHost int
 
-	// These are the http and https address for the upstream proxy 
+	// These are the http and https address for the upstream proxy
 	UpstreamHttpProxyAddr  string
 	UpstreamHttpsProxyAddr string
 
@@ -84,7 +85,12 @@ type Config struct {
 	ProxyDialTimeout func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error)
 
 	// Custom handler to allow clients to modify reject responses
+	// Deprecated: RejectResponseHandler is deprecated.Please use RejectResponseHandlerWithCtx instead.
 	RejectResponseHandler func(*http.Response)
+
+	// Custom handler to allow clients to modify reject responses
+	// In case RejectResponseHandler is set, this cannot be used.
+	RejectResponseHandlerWithCtx func(*SmokescreenContext, *http.Response)
 
 	// Custom handler to allow clients to modify successful CONNECT responses
 	AcceptResponseHandler func(*SmokescreenContext, *http.Response) error
@@ -99,6 +105,8 @@ type Config struct {
 	// If smokescreen denies a request, this handler is not called.
 	// If the handler returns an error, smokescreen will deny the request.
 	PostDecisionRequestHandler func(*http.Request) error
+	// MitmCa is used to provide a custom CA for MITM
+	MitmTLSConfig func(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error)
 }
 
 type missingRoleError struct {
@@ -412,6 +420,13 @@ func (config *Config) SetupTls(certFile, keyFile string, clientCAFiles []string)
 		ClientCAs:    clientCAs,
 	}
 
+	return nil
+}
+
+func (config *Config) Validate() error {
+	if config.RejectResponseHandler != nil && config.RejectResponseHandlerWithCtx != nil {
+		return errors.New("RejectResponseHandler and RejectResponseHandlerWithCtx cannot be used together")
+	}
 	return nil
 }
 
