@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stripe/smokescreen/cmd"
@@ -50,6 +51,14 @@ func main() {
 		// Set the standard logger to use our logger's writer as output.
 		log.SetOutput(adapter)
 		log.SetFlags(0)
+
+		go func() {
+			conf.Log.Info("Starting pprof server on :6060")
+			if err := http.ListenAndServe(":6060", nil); err != nil {
+				conf.Log.Errorf("pprof server failed: %v", err)
+			}
+		}()
+
 		smokescreen.StartWithConfig(conf, nil)
 	}
 	// Otherwise, --help or --version was passed and handled by NewConfiguration, so do nothing
