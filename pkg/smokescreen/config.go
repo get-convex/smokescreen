@@ -231,9 +231,11 @@ func (config *Config) SetResolverAddresses(resolverAddresses []string) error {
 
 	r := net.Resolver{
 		PreferGo: true,
-		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		// Honor the requested network: Go's resolver retries truncated
+		// UDP responses over TCP (RFC 7766).
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			d := net.Dialer{}
-			return d.DialContext(ctx, "udp", addr)
+			return d.DialContext(ctx, network, addr)
 		},
 	}
 	config.Resolver = &r
