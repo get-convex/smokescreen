@@ -61,6 +61,11 @@ func NewConfiguration(args []string, logger *log.Logger) (*smokescreen.Config, e
 			Value: time.Duration(10) * time.Second,
 			Usage: "Time out after `DURATION` when connecting.",
 		},
+		cli.DurationFlag{
+			Name:  "upstream-tcp-user-timeout",
+			Value: smokescreen.DefaultUpstreamTCPUserTimeout,
+			Usage: "Close an upstream connection after data sent to it goes unacknowledged for `DURATION`, rather than the kernel's ~16m retransmit budget.  Linux only; 0 disables.",
+		},
 		cli.BoolFlag{
 			Name:  "proxy-protocol",
 			Usage: "Enable PROXY protocol support.",
@@ -196,6 +201,10 @@ func NewConfiguration(args []string, logger *log.Logger) (*smokescreen.Config, e
 
 		if c.IsSet("timeout") {
 			conf.ConnectTimeout = c.Duration("timeout")
+		}
+
+		if c.IsSet("upstream-tcp-user-timeout") {
+			conf.UpstreamTCPUserTimeout = c.Duration("upstream-tcp-user-timeout")
 		}
 
 		if c.IsSet("proxy-protocol") {

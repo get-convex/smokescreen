@@ -70,6 +70,12 @@ type Config struct {
 	// A connection is idle if it has been inactive (no bytes in/out) for this many seconds.
 	IdleTimeout time.Duration
 
+	// Close an upstream connection after data sent to it goes unacknowledged for
+	// this long, in place of tcp_retries2's ~16 minutes. Also caps unanswered
+	// keepalive probes and SYN retries. A slow peer still acknowledges, so this
+	// does not bound response time. Linux only; 0 disables.
+	UpstreamTCPUserTimeout time.Duration
+
 	// These are *only* used for traditional HTTP proxy requests
 	TransportMaxIdleConns        int
 	TransportMaxIdleConnsPerHost int
@@ -247,6 +253,8 @@ type authKeyId struct {
 	Id []byte `asn1:"optional,tag:0"`
 }
 
+const DefaultUpstreamTCPUserTimeout = 30 * time.Second
+
 func NewConfig() *Config {
 	log.SetFormatter(&log.JSONFormatter{
 		TimestampFormat: time.RFC3339Nano,
@@ -263,6 +271,7 @@ func NewConfig() *Config {
 		ShuttingDown:            atomic.Value{},
 		MetricsClient:           metrics.NewNoOpMetricsClient(),
 		Network:                 "ip",
+		UpstreamTCPUserTimeout:  DefaultUpstreamTCPUserTimeout,
 	}
 }
 
