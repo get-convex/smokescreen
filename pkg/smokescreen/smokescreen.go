@@ -24,6 +24,7 @@ import (
 	"github.com/stripe/smokescreen/pkg/smokescreen/conntrack"
 	"github.com/stripe/smokescreen/pkg/smokescreen/hostport"
 	"github.com/stripe/smokescreen/pkg/smokescreen/metrics"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -245,6 +246,23 @@ func proxyContext(ctx context.Context) (*goproxy.ProxyCtx, bool) {
 	return pctx, ok
 }
 
+// tcpUserTimeoutControl returns a net.Dialer.Control hook setting
+// TCP_USER_TIMEOUT, or nil when d is zero. net.Dialer exposes no field for the
+// option and the frozen syscall package predates it, so the constant comes from
+// x/sys/unix, which defines it on Linux only. A setsockopt failure is dropped
+// rather than failing the dial.
+func tcpUserTimeoutControl(d time.Duration) func(string, string, syscall.RawConn) error {
+	if d <= 0 {
+		return nil
+	}
+	millis := int(d.Milliseconds())
+	return func(_, _ string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) {
+			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, unix.TCP_USER_TIMEOUT, millis)
+		})
+	}
+}
+
 func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	pctx, ok := proxyContext(ctx)
 	if !ok {
@@ -284,7 +302,11 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 
 	start := time.Now()
 	if sctx.cfg.ProxyDialTimeout == nil {
-		conn, err = net.DialTimeout(network, d.ResolvedAddr.String(), sctx.cfg.ConnectTimeout)
+		dialer := net.Dialer{
+			Timeout: sctx.cfg.ConnectTimeout,
+			Control: tcpUserTimeoutControl(sctx.cfg.UpstreamTCPUserTimeout),
+		}
+		conn, err = dialer.Dial(network, d.ResolvedAddr.String())
 	} else {
 		conn, err = sctx.cfg.ProxyDialTimeout(ctx, network, d.ResolvedAddr.String(), sctx.cfg.ConnectTimeout)
 	}
